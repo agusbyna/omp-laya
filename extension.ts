@@ -34,6 +34,58 @@ export default function ompLaya(pi: ExtensionAPI) {
 			}
 		},
 	});
+
+	// Pre-screen every prompt through laya before it reaches the LLM. The returned
+	// message is appended to the turn's context right after the user prompt.
+	// LAYA_HOOK=off disables it. A slow first model load or a laya error degrades
+	// to "no pre-screen" (omp catches handler errors/timeouts) — the prompt always flows.
+	pi.on("before_agent_start", async (event) => {
+		if (process.env.LAYA_HOOK === "off") return;
+		const prompt = typeof event?.prompt === "string" ? event.prompt.trim() : "";
+		if (!prompt) return;
+		try {
+			const model = await getLaya(process.env.LAYA_MODEL_DIR || undefined);
+			const result = (await model.systemOne({ prompt }, HOOK_QUESTIONS)) as {
+				answers: Record<string, { type: string; choice?: string; probabilities?: Record<string, number>; confidence?: number; score?: number; noul?: number }>;
+			};
+			return { message: `[laya pre-screen, automated] ${formatAnswers(result.answers)}` };
+		} catch (err) {
+			console.error(`laya before_agent_start: ${(err as Error).message}`);
+		}
+	});
+}
+
+// Fixed triage schema for the hook: what the prompt wants, and whether it is actionable.
+const HOOK_QUESTIONS = {
+	intent: {
+		type: "choice",
+		instructions: "Primary intent of this user message to a coding assistant",
+		criteria: {
+			question: "asks how/why — explanation only, no changes",
+			task: "requests a change, build, or fix",
+			bug: "reports an error, failure, or unexpected behavior",
+			chat: "greeting, thanks, or small talk",
+		},
+	},
+	underspecified: {
+		type: "noul",
+		instructions: "The request lacks details needed to act on it without asking clarifying questions",
+	},
+};
+
+function fmt(n: unknown): string {
+	return typeof n === "number" ? n.toFixed(2) : "?";
+}
+
+function formatAnswers(answers: Record<string, { type: string; choice?: string; probabilities?: Record<string, number>; confidence?: number; score?: number; noul?: number }>): string {
+	const parts: string[] = [];
+	for (const [name, a] of Object.entries(answers)) {
+		if (a?.type === "choice")
+			parts.push(`${name}=${a.choice} (p=${fmt(a.probabilities?.[a.choice ?? ""])}, conf=${fmt(a.confidence)})`);
+		else if (a?.type === "score") parts.push(`${name}=${fmt(a.score)} (conf=${fmt(a.confidence)})`);
+		else if (a?.type === "noul") parts.push(`${name}=${fmt(a.noul)}`);
+	}
+	return parts.join(" | ");
 }
 
 // Split args into [state, questions]; each may be single- or double-quoted JSON, or bare text (state only).
