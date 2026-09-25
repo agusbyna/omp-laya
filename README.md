@@ -5,7 +5,7 @@ Thin omp wrapper around [@receptron/laya](https://github.com/receptron/laya) —
 ## Install
 
 ```sh
-omp plugin install github:omp-laya/omp-laya
+omp plugin install github:agusbyna/omp-laya
 ```
 
 Requires Node >= 20.
