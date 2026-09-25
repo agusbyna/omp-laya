@@ -13,8 +13,17 @@ Requires Node >= 20.
 ## Usage
 
 ```
-/laya '<state JSON or text>' '<questions JSON>'
+/laya ['<state JSON or text>' ['<questions JSON>']]
 ```
+
+Missing arguments auto-fill instead of erroring:
+
+- `/laya` (no args) → state = last user prompt in the session, questions = default triage schema
+  (`intent` choice + `underspecified` noul, same as the pre-screen hook).
+- `/laya '<state>'` (state only) → state as given, questions = default triage schema.
+- `/laya '<questions JSON>'` (a lone questions-shaped object, all values typed `choice`/`score`/`noul`)
+  → state = last user prompt, questions as given.
+- Both sides malformed → the original parse error, never silent defaults.
 
 Choice:
 

@@ -13,14 +13,18 @@ async function getLaya(modelDir?: string) {
 
 export default function ompLaya(pi: ExtensionAPI) {
 	pi.registerCommand("laya", {
-		description: "System-1 decision: /laya '<state-as-JSON-or-text>' '<questions-as-JSON>'",
+		description: "System-1 decision: /laya ['<state>' ['<questions JSON>']] — missing args auto-fill",
 	handler: async (args, ctx) => {
-		const parsed = parseArgs(String(args || ""));
+		const raw = String(args || "").trim();
+		const direct = parseInner(raw);
+		// Auto mode: fill the missing side — bare /laya takes the session's last user
+		// prompt as state and the triage schema as questions; state-only takes HOOK_QUESTIONS.
+		const auto = direct.value ? null : autoFill(raw, ctx, direct.reason);
+		const parsed = direct.value || auto?.value;
 		if (!parsed) {
-			const received = String(args || "");
-			const shown = received.length > 200 ? received.slice(0, 200) + "…" : received;
+			const shown = raw.length > 200 ? raw.slice(0, 200) + "…" : raw;
 			ctx.ui.notify(
-				`Usage: /laya '<state JSON or text>' '<questions JSON>'\nExample: /laya '{"subject":"refund","body":"..."}' '{"department":{"type":"choice","instructions":"Which team?","criteria":["billing","support"]}}'\nReceived: ${shown || "(empty)"}\nReason: ${parseArgsReason(String(args || "")) || "unknown"}`,
+				`Usage: /laya ['<state JSON or text>' ['<questions JSON>']]\nAuto: no args → last user prompt + default triage questions; state only → default questions.\nExample: /laya '{"subject":"refund","body":"..."}' '{"department":{"type":"choice","instructions":"Which team?","criteria":["billing","support"]}}'\nReceived: ${shown || "(empty)"}\nReason: ${(auto?.reason ?? direct.reason) || "unknown"}`,
 				"info",
 			);
 			return;
@@ -88,15 +92,91 @@ function formatAnswers(answers: Record<string, { type: string; choice?: string; 
 	return parts.join(" | ");
 }
 
-// Split args into [state, questions]; each may be single- or double-quoted JSON, or bare text (state only).
-// Tolerates TUI stripping outer quotes: falls back to brace-matching when splitArgs fragments the JSON.
-export function parseArgs(args: string): { state: unknown; questions: Record<string, unknown> } | null {
-	return parseInner(args.trim()).value;
+// Auto mode: fill whichever side the invocation is missing. Empty args → session's
+// last user prompt as state + HOOK_QUESTIONS; a lone state (bare text or one JSON
+// object) → HOOK_QUESTIONS; a lone questions-shaped object → last user prompt.
+// Anything two-sided but malformed keeps the original parse error instead of
+// silently swapping the user's questions for defaults.
+function autoFill(
+	raw: string,
+	ctx: { sessionManager?: { getEntries(): unknown[] } },
+	reason: string | null,
+): { value: { state: unknown; questions: Record<string, unknown> } | null; reason: string | null } {
+	if (!raw) {
+		const prompt = lastUserPrompt(ctx);
+		if (!prompt) return fail("kurang argumen: tidak ada prompt user di sesi — beri '<state>'");
+		return ok({ prompt }, HOOK_QUESTIONS);
+	}
+	const objs = extractJsonObjects(raw);
+	const lone = objs.length === 1 && !raw.slice(0, objs[0].start).trim() && !raw.slice(objs[0].end).trim() ? objs[0].text : null;
+	if (!lone && objs.length > 0) return fail(reason || "kurang argumen: butuh <state> dan <questions JSON>");
+	if (lone) {
+		const obj = parseState(lone);
+		if (looksLikeQuestions(obj)) {
+			const prompt = lastUserPrompt(ctx);
+			if (!prompt) return fail("butuh <state>: tidak ada prompt user di sesi");
+			return ok({ prompt }, obj);
+		}
+		return ok(obj, HOOK_QUESTIONS);
+	}
+	return ok(parseState(raw), HOOK_QUESTIONS);
 }
 
-// Null when valid; otherwise a specific reason (used in Usage message + tests).
-export function parseArgsReason(args: string): string | null {
-	return parseInner(args.trim()).reason;
+// The session's last non-command user message, as plain text (mirrors what the
+// before_agent_start hook sees in event.prompt).
+function lastUserPrompt(ctx: { sessionManager?: { getEntries(): unknown[] } }): string | null {
+	const entries = ctx.sessionManager?.getEntries?.() ?? [];
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const e = entries[i];
+		if (!e || typeof e !== "object" || !("type" in e) || e.type !== "message") continue;
+		if (!("message" in e) || !e.message || typeof e.message !== "object") continue;
+		const m = e.message;
+		if (!("role" in m) || m.role !== "user") continue;
+		if (("synthetic" in m && m.synthetic) || ("steering" in m && m.steering)) continue;
+		if (!("content" in m)) continue;
+		const text = messageText(m.content);
+		if (text) return text;
+	}
+	return null;
+}
+
+// Text blocks only; images and unknown blocks contribute nothing.
+function isTextBlock(b: unknown): b is { text: string } {
+	return (
+		!!b &&
+		typeof b === "object" &&
+		"type" in b &&
+		b.type === "text" &&
+		"text" in b &&
+		typeof b.text === "string"
+	);
+}
+
+function messageText(content: unknown): string {
+	let t: string;
+	if (typeof content === "string") t = content;
+	else if (Array.isArray(content)) t = content.map((b) => (isTextBlock(b) ? b.text : "")).join("\n");
+	else t = "";
+	const s = t.trim();
+	// Skip slash-command echoes and this plugin's own pre-screen lines.
+	if (!s || s.startsWith("/") || s.startsWith("[laya pre-screen")) return "";
+	return s;
+}
+
+// Static membership table for the three question types.
+const QUESTION_TYPES: Record<string, true> = { choice: true, score: true, noul: true };
+
+// A questions map: every value is an object declaring one of the question types.
+function looksLikeQuestions(v: unknown): v is Record<string, unknown> {
+	if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+	const vals = Object.values(v);
+	return (
+		vals.length > 0 &&
+		vals.every((q) => {
+			if (!q || typeof q !== "object" || Array.isArray(q)) return false;
+			return "type" in q && QUESTION_TYPES[String(q.type)] === true;
+		})
+	);
 }
 
 function parseInner(s: string): { value: { state: unknown; questions: Record<string, unknown> } | null; reason: string | null } {
