@@ -1,13 +1,28 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
+// Load options come from env so a multilingual (or pinned) ONNX bundle can be
+// selected without code changes: LAYA_MODEL_DIR wins when set; otherwise
+// LAYA_REPO / LAYA_SUBFOLDER / LAYA_REVISION / LAYA_CACHE_DIR map straight to
+// Laya.load(). Unset vars fall through to @receptron/laya defaults.
 // Laya instance is cached after the first call in this process. Lazy import
 // keeps `omp` startup fast and avoids the ~1.7GB model download until use.
 let laya: { systemOne(state: unknown, questions: Record<string, unknown>): Promise<unknown> } | null = null;
 
-async function getLaya(modelDir?: string) {
+async function loadOpts() {
+	const o: Record<string, string> = {};
+	const take = (k: string, v: string | undefined) => { if (v) o[k] = v; };
+	take("modelDir", process.env.LAYA_MODEL_DIR);
+	take("repo", process.env.LAYA_REPO);
+	take("subfolder", process.env.LAYA_SUBFOLDER);
+	take("revision", process.env.LAYA_REVISION);
+	take("cacheDir", process.env.LAYA_CACHE_DIR);
+	return Object.keys(o).length ? o : undefined;
+}
+
+async function getLaya() {
 	if (laya) return laya;
 	const { Laya } = await import("@receptron/laya");
-	laya = await Laya.load(modelDir ? { modelDir } : undefined);
+	laya = await Laya.load(await loadOpts());
 	return laya;
 }
 
@@ -30,7 +45,7 @@ export default function ompLaya(pi: ExtensionAPI) {
 			return;
 		}
 			try {
-				const model = await getLaya(process.env.LAYA_MODEL_DIR || undefined);
+				const model = await getLaya();
 				const result = await model.systemOne(parsed.state, parsed.questions);
 				return JSON.stringify(result, null, 1);
 			} catch (err) {
@@ -48,7 +63,7 @@ export default function ompLaya(pi: ExtensionAPI) {
 		const prompt = typeof event?.prompt === "string" ? event.prompt.trim() : "";
 		if (!prompt) return;
 		try {
-			const model = await getLaya(process.env.LAYA_MODEL_DIR || undefined);
+			const model = await getLaya();
 			const result = (await model.systemOne({ prompt }, HOOK_QUESTIONS)) as {
 				answers: Record<string, { type: string; choice?: string; probabilities?: Record<string, number>; confidence?: number; score?: number; noul?: number }>;
 			};

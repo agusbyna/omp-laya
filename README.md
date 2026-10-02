@@ -46,6 +46,9 @@ Noul (boolean):
 Returns the `systemOne` result as JSON (answers + probabilities + confidence).
 
 `LAYA_MODEL_DIR` env var: use a local ONNX bundle instead of the Hugging Face download.
+`LAYA_REPO` / `LAYA_SUBFOLDER` / `LAYA_REVISION` / `LAYA_CACHE_DIR` map straight to
+`Laya.load()` (e.g. `LAYA_SUBFOLDER=multilingual` once receptron publishes that
+checkpoint as ONNX). Unset vars fall through to `@receptron/laya` defaults.
 
 ## Prompt pre-screen hook
 
