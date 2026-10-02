@@ -75,20 +75,21 @@ export default function ompLaya(pi: ExtensionAPI) {
 }
 
 // Fixed triage schema for the hook: what the prompt wants, and whether it is actionable.
+// Criteria carry ID/EN cue words — zero-shot checkpoint is wording-sensitive.
 const HOOK_QUESTIONS = {
 	intent: {
 		type: "choice",
 		instructions: "Primary intent of this user message to a coding assistant",
 		criteria: {
-			question: "asks how/why — explanation only, no changes",
-			task: "requests a change, build, or fix",
-			bug: "reports an error, failure, or unexpected behavior",
-			chat: "greeting, thanks, or small talk",
+			question: "asks for info or explanation — how/why/what/whether; apakah, bagaimana, kenapa, apa itu, asking if something is possible",
+			task: "orders or requests work to be done — imperative, tolong/minta + action verb: buatkan, tambah, perbaiki, commit, push, test, jalankan",
+			bug: "reports an error, failure, or unexpected behavior; gagal, rusak, tidak jalan, crash",
+			chat: "greeting, thanks, confirmation, or small talk; halo, makasih, thanks, mau, iya, ok",
 		},
 	},
 	underspecified: {
 		type: "noul",
-		instructions: "The request lacks details needed to act on it without asking clarifying questions",
+		instructions: "The request lacks details needed to act without asking clarifying questions first — e.g. one or two words, no target, no context",
 	},
 };
 
